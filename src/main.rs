@@ -21,7 +21,7 @@ impl Service<Request> for HelloWorld {
 
     fn call(&self, _req: Request) -> Self::Future {
         let fut = async {
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
             Ok(Response::new(Full::new(Bytes::from("Hello world"))))
         };
         Box::pin(fut)
@@ -57,14 +57,17 @@ pub struct TimeoutService<S> {
     duration: Duration,
 }
 
-impl Service<Request> for TimeoutService<HelloWorld> {
-    type Response = Response;
+impl<S> Service<Request> for TimeoutService<S>
+where
+    S: Clone + 'static,
+    S: Service<Request> + Send + Sync,
+    S::Future: Send,
+    S::Error: std::fmt::Display,
+{
+    type Response = S::Response;
     type Error = String;
-    type Future = Pin<Box<dyn Future<Output = Result<Response, String>> + Send>>;
-    fn call(
-        &self,
-        request: Request,
-    ) -> Pin<Box<dyn Future<Output = Result<Response, String>> + Send>> {
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    fn call(&self, request: Request) -> Self::Future {
         let this = self.clone();
 
         Box::pin(async move {
@@ -72,9 +75,9 @@ impl Service<Request> for TimeoutService<HelloWorld> {
                 tokio::time::timeout(this.duration, this.inner_service.call(request)).await;
 
             match result {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(_e) => Err("Timeout error".to_string()),
+                Ok(Ok(result)) => Result::<_, Self::Error>::Ok(result),
+                Ok(Err(e)) => Result::<Self::Response, _>::Err(e.to_string()),
+                Err(_e) => Result::<Self::Response, _>::Err("timedout".to_string()),
             }
         })
     }
